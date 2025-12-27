@@ -26,6 +26,11 @@ on:
         required: false
         default: false
 
+      target_user_id:
+        description: 'Target User ID (for safe DM testing)'
+        required: false
+        default: ''
+
 jobs:
   wish:
     runs-on: ubuntu-latest
@@ -58,6 +63,9 @@ jobs:
         if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
           if [ -n "${{ inputs.time_of_day }}" ]; then
             ARGS="$ARGS --time \"${{ inputs.time_of_day }}\""
+          fi
+          if [ -n "${{ inputs.target_user_id }}" ]; then
+            ARGS="$ARGS --target-id \"${{ inputs.target_user_id }}\""
           fi
           if [ "${{ inputs.test_mode }}" == "true" ]; then
             ARGS="$ARGS --test"
