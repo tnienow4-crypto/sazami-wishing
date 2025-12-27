@@ -40,10 +40,14 @@ def get_time_of_day():
     else:
         return "Night"
 
-TIME_OF_DAY = get_time_of_day()
+TIME_OF_DAY = get_time_of_day().strip('"').strip("'")
 IS_TEST = args.test
 
-print(f"Starting Daily Wisher. Time: {TIME_OF_DAY}, Test Mode: {IS_TEST}")
+if args.target_id:
+    # Sanitize target_id (remove quotes if passed by shell)
+    args.target_id = args.target_id.strip('"').strip("'")
+
+print(f"Starting Daily Wisher. Time: {TIME_OF_DAY}, Test Mode: {IS_TEST}, Target: {args.target_id}")
 
 # Setup Discord
 intents = discord.Intents.default()
