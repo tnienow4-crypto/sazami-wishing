@@ -1,0 +1,68 @@
+name: Daily Sazami Wish
+
+on:
+  schedule:
+    # Times in UTC (IST - 05:30)
+    # 9 AM IST -> 03:30 UTC
+    - cron: '30 3 * * *'
+    # 12 PM IST -> 06:30 UTC
+    - cron: '30 6 * * *'
+    # 4 PM IST -> 10:30 UTC
+    - cron: '30 10 * * *'
+    # 7 PM IST -> 13:30 UTC
+    - cron: '30 13 * * *'
+    # 11 PM IST -> 17:30 UTC
+    - cron: '30 17 * * *'
+  
+  workflow_dispatch:
+    inputs:
+      time_of_day:
+        description: 'Time of Day (e.g. Morning, Evening). Leave empty for auto-detect.'
+        required: false
+        default: ''
+      test_mode:
+        description: 'Test Mode (Dry Run - no DMs)'
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  wish:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+    - name: Run Daily Wish
+      env:
+        BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        GUILD_ID: ${{ secrets.GUILD_ID }}
+        CATEGORY_ID: ${{ secrets.CATEGORY_ID }}
+        CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        DEBUG_MODE: "false" # Always false for prod run
+      run: |
+        # Construct arguments based on inputs
+        ARGS=""
+        
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          if [ -n "${{ inputs.time_of_day }}" ]; then
+            ARGS="$ARGS --time \"${{ inputs.time_of_day }}\""
+          fi
+          if [ "${{ inputs.test_mode }}" == "true" ]; then
+            ARGS="$ARGS --test"
+          fi
+        fi
+        
+        echo "Running daily_wisher.py with args: $ARGS"
+        python daily_wisher.py $ARGS
