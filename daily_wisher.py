@@ -55,6 +55,31 @@ intents.members = True
 intents.message_content = True
 client = discord.Client(intents=intents)
 
+
+def chunk_mentions(members, *, prefix: str = "", suffix: str = "", max_len: int = 1900):
+    """Yield strings of user mentions that fit within Discord's message limit.
+
+    max_len is conservative to leave room for extra text.
+    """
+    chunk = []
+    cur_len = len(prefix) + len(suffix)
+
+    for m in members:
+        mention = m.mention
+        add_len = len(mention) + (1 if chunk else 0)
+        if chunk and cur_len + add_len > max_len:
+            yield (prefix + " ".join(chunk) + suffix)
+            chunk = [mention]
+            cur_len = len(prefix) + len(suffix) + len(mention)
+        else:
+            if chunk:
+                cur_len += 1
+            chunk.append(mention)
+            cur_len += len(mention)
+
+    if chunk:
+        yield (prefix + " ".join(chunk) + suffix)
+
 @client.event
 async def on_ready():
     print(f'Logged in as {client.user}')
@@ -125,6 +150,8 @@ async def on_ready():
         print(f"Fetching members...")
         if not guild.chunked:
             await guild.chunk()
+
+        dm_failed_members = []
             
         for member in guild.members:
             if member.bot:
@@ -145,19 +172,30 @@ async def on_ready():
                     await member.send(dm_wish, file=file_to_send)
                     print(f"Sent DM to {member.name}")
                 except discord.Forbidden:
-                    print(f"DM disabled for {member.name}. Mentioning in channel.")
-                    if channel:
-                        # Mention in channel (usually no image needed here to avoid spam, or same image?)
-                        # User asked: "mention him in the channel... and don't hard code channel id"
-                        # Keep it simple: Mention + Text. Image is already in the main channel wish.
-                        await channel.send(f"{member.mention} {dm_wish}")
-                    else:
-                        print("Cannot mention user (no channel).")
+                    print(f"DM disabled for {member.name}. Will mention in summary message.")
+                    dm_failed_members.append(member)
                 except Exception as e:
                     print(f"Error sending to {member.name}: {e}")
 
             # Sleep briefly to avoid Discord rate limits (not Gemini anymore)
             await asyncio.sleep(1.5)
+
+        # 5. Single summary message for members with DMs disabled
+        if not IS_TEST and channel and dm_failed_members:
+            allowed = discord.AllowedMentions(users=True, roles=False, everyone=False, replied_user=False)
+
+            mentions_text = " ".join(m.mention for m in dm_failed_members)
+            combined = f"{mentions_text}\n\n{dm_wish}".strip()
+
+            # Prefer ONE message. If too long (large server), fall back to chunking mentions,
+            # attaching the wish only to the final chunk.
+            if len(combined) <= 2000:
+                await channel.send(combined, allowed_mentions=allowed)
+            else:
+                mention_chunks = list(chunk_mentions(dm_failed_members, max_len=1900))
+                for chunk_text in mention_chunks[:-1]:
+                    await channel.send(chunk_text, allowed_mentions=allowed)
+                await channel.send(f"{mention_chunks[-1]}\n\n{dm_wish}".strip(), allowed_mentions=allowed)
 
     except Exception as e:
         print(f"An error occurred during execution: {e}")
