@@ -237,6 +237,223 @@ def format_decorated_wish(*, time_of_day: str, wish_text: str, custom_emojis: li
     return f"{header}\n{wish_text}".strip()
 
 
+# Time-of-day theme configurations for embeds
+TIME_THEMES = {
+    "Morning": {
+        "color": 0xFFD700,  # Golden sunrise
+        "emoji": "🌅",
+        "greeting": "Rise & Shine!",
+        "quote_prompt": "morning motivation",
+        "decorative_line": "═══════════════════════════",
+    },
+    "Noon": {
+        "color": 0xFF6B35,  # Bright orange sun
+        "emoji": "☀️",
+        "greeting": "Midday Vibes!",
+        "quote_prompt": "afternoon energy",
+        "decorative_line": "═══════════════════════════",
+    },
+    "Afternoon": {
+        "color": 0xFFA500,  # Warm orange
+        "emoji": "🌤️",
+        "greeting": "Afternoon Bliss!",
+        "quote_prompt": "afternoon relaxation",
+        "decorative_line": "═══════════════════════════",
+    },
+    "Evening": {
+        "color": 0x9B59B6,  # Purple twilight
+        "emoji": "🌆",
+        "greeting": "Evening Serenity!",
+        "quote_prompt": "evening peace",
+        "decorative_line": "═══════════════════════════",
+    },
+    "Night": {
+        "color": 0x2C3E50,  # Deep night blue
+        "emoji": "🌙",
+        "greeting": "Sweet Dreams!",
+        "quote_prompt": "goodnight wishes",
+        "decorative_line": "═══════════════════════════",
+    },
+}
+
+
+def create_wish_embed(
+    *,
+    guild: discord.Guild,
+    time_of_day: str,
+    wish_text: str,
+    custom_emojis: list[str],
+    image_filename: str | None = None,
+) -> discord.Embed:
+    """Create a beautiful professional embed for daily wishes."""
+    
+    theme = TIME_THEMES.get(time_of_day, TIME_THEMES["Morning"])
+    unique_emojis = [e for e in (custom_emojis or []) if isinstance(e, str) and e.strip()]
+    unique_emojis = list(dict.fromkeys(unique_emojis))
+    
+    # Build decorative emoji string
+    emoji_decoration = " ".join(unique_emojis[:3]) if unique_emojis else ""
+    
+    # Create embed with theme color
+    embed = discord.Embed(
+        color=theme["color"],
+        timestamp=datetime.datetime.now(IST),
+    )
+    
+    # Set author with server info and icon
+    server_icon_url = guild.icon.url if guild.icon else None
+    embed.set_author(
+        name=f"✨ {guild.name} ✨",
+        icon_url=server_icon_url,
+    )
+    
+    # Build the title with emojis
+    title_emojis_left = unique_emojis[0] if len(unique_emojis) >= 1 else theme["emoji"]
+    title_emojis_right = unique_emojis[1] if len(unique_emojis) >= 2 else theme["emoji"]
+    
+    embed.title = f"{title_emojis_left} 𝐆𝐨𝐨𝐝 {time_of_day}! {title_emojis_right}"
+    
+    # Build description with decorative elements
+    decorative_top = f"╭{'─' * 25}╮"
+    decorative_bottom = f"╰{'─' * 25}╯"
+    
+    # Format the wish text nicely
+    wish_text = strip_discord_mentions(wish_text)
+    wish_text = strip_unicode_emojis(wish_text)
+    
+    description_parts = [
+        f"```ansi\n\u001b[1;33m{theme['greeting']}\u001b[0m\n```",
+        "",
+        f"{theme['emoji']} {wish_text}",
+        "",
+    ]
+    
+    # Add custom emojis decoration if available
+    if emoji_decoration:
+        description_parts.append(f"\n{emoji_decoration}")
+    
+    embed.description = "\n".join(description_parts)
+    
+    # Add inspirational quote field
+    embed.add_field(
+        name=f"━━━━━━━━━━━━━━━━━",
+        value=f"*Wishing you all the best today!* {theme['emoji']}",
+        inline=False,
+    )
+    
+    # Set image (the wish image)
+    if image_filename:
+        embed.set_image(url=f"attachment://{image_filename}")
+    
+    # Set thumbnail to server icon for extra flair
+    if server_icon_url:
+        embed.set_thumbnail(url=server_icon_url)
+    
+    # Set footer with bot signature and custom emojis
+    footer_emoji = unique_emojis[-1] if unique_emojis else "💫"
+    embed.set_footer(
+        text=f"From Sazami with love {theme['emoji']} • Have a wonderful {time_of_day.lower()}!",
+        icon_url=server_icon_url,
+    )
+    
+    return embed
+
+
+def create_premium_wish_embed(
+    *,
+    guild: discord.Guild,
+    time_of_day: str,
+    wish_text: str,
+    custom_emojis: list[str],
+    image_filename: str | None = None,
+) -> list[discord.Embed]:
+    """Create a premium-style beautiful embed with more decorations.
+    
+    Returns a list of embeds (banner embed + main wish embed if banner exists).
+    """
+    
+    theme = TIME_THEMES.get(time_of_day, TIME_THEMES["Morning"])
+    unique_emojis = [e for e in (custom_emojis or []) if isinstance(e, str) and e.strip()]
+    unique_emojis = list(dict.fromkeys(unique_emojis))
+    
+    server_icon_url = guild.icon.url if guild.icon else None
+    server_banner_url = guild.banner.url if guild.banner else None
+    
+    embeds: list[discord.Embed] = []
+    
+    # Create banner embed if server has a banner
+    if server_banner_url:
+        banner_embed = discord.Embed(color=theme["color"])
+        banner_embed.set_image(url=server_banner_url)
+        embeds.append(banner_embed)
+    
+    # Main wish embed
+    main_embed = discord.Embed(
+        color=theme["color"],
+        timestamp=datetime.datetime.now(IST),
+    )
+    
+    # Author with server branding
+    main_embed.set_author(
+        name=f"『 {guild.name} 』",
+        icon_url=server_icon_url,
+    )
+    
+    # Stylized title with custom emojis
+    left_deco = unique_emojis[0] if len(unique_emojis) >= 1 else "✦"
+    right_deco = unique_emojis[1] if len(unique_emojis) >= 2 else "✦"
+    center_emoji = theme["emoji"]
+    
+    main_embed.title = f"{left_deco} ─ {center_emoji} 𝑮𝒐𝒐𝒅 {time_of_day} {center_emoji} ─ {right_deco}"
+    
+    # Clean the wish text
+    wish_text = strip_discord_mentions(wish_text)
+    wish_text = strip_unicode_emojis(wish_text)
+    
+    # Build beautiful description
+    sparkle_line = "･ﾟ✧ ━━━━━━━━━━━━━━ ✧ﾟ･"
+    emoji_row = " ".join(unique_emojis[:4]) if unique_emojis else f"{theme['emoji']} ✨ 💫 🌟"
+    
+    description = f"""
+{sparkle_line}
+
+{theme['emoji']} **{theme['greeting']}** {theme['emoji']}
+
+{wish_text}
+
+{sparkle_line}
+
+{emoji_row}
+"""
+    
+    main_embed.description = description.strip()
+    
+    # Add a motivational field
+    main_embed.add_field(
+        name=f"💝 ── Today's Blessing ── 💝",
+        value=f"> *May your {time_of_day.lower()} be filled with joy and positivity!*",
+        inline=False,
+    )
+    
+    # Set main image (wish image)
+    if image_filename:
+        main_embed.set_image(url=f"attachment://{image_filename}")
+    
+    # Set thumbnail to server icon
+    if server_icon_url:
+        main_embed.set_thumbnail(url=server_icon_url)
+    
+    # Beautiful footer
+    footer_text = f"✿ Sazami • {guild.name} ✿ • Happy {time_of_day}!"
+    main_embed.set_footer(
+        text=footer_text,
+        icon_url=server_icon_url,
+    )
+    
+    embeds.append(main_embed)
+    return embeds
+
+
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
@@ -299,10 +516,16 @@ async def on_ready():
             stickers=stickers,
         )
 
-        decorated = format_decorated_wish(
+        # Get custom emoji strings for the embed
+        custom_emoji_strings = [str(e) for e in (picked_emojis or [])]
+
+        # Create the beautiful embeds (returns list with banner + main embed)
+        wish_embeds = create_premium_wish_embed(
+            guild=guild,
             time_of_day=TIME_OF_DAY,
             wish_text=base_wish,
-            custom_emojis=[str(e) for e in (picked_emojis or [])],
+            custom_emojis=custom_emoji_strings,
+            image_filename=image_filename if has_image else None,
         )
 
         if not channel:
@@ -310,14 +533,17 @@ async def on_ready():
 
         if IS_TEST:
             print(
-                f"[TEST] Channel Message to #{channel.name}: {decorated} "
-                f"[Sticker: {getattr(picked_sticker, 'name', None)}] "
+                f"[TEST] Channel Embed to #{channel.name}:\n"
+                f"  Embeds Count: {len(wish_embeds)}\n"
+                f"  Title: {wish_embeds[-1].title}\n"
+                f"  Description: {wish_embeds[-1].description[:100]}...\n"
+                f"  [Sticker: {getattr(picked_sticker, 'name', None)}] "
                 f"[Image: {image_filename if has_image else 'None'}]"
             )
             return
 
         send_kwargs: dict[str, Any] = {
-            "content": decorated,
+            "embeds": wish_embeds,
             "allowed_mentions": discord.AllowedMentions.none(),
         }
 
@@ -339,7 +565,7 @@ async def on_ready():
                 pass
 
         await channel.send(**send_kwargs)
-        print(f"Sent server wish to #{channel.name}")
+        print(f"Sent server wish embed to #{channel.name}")
 
     except Exception as e:
         print(f"An error occurred during execution: {e}")
