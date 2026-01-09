@@ -141,9 +141,24 @@ def fallback_unicode_emojis(time_of_day: str) -> list[str]:
 
 def format_decorated_wish(*, time_of_day: str, wish_text: str, custom_emoji: str | None):
     wish_text = strip_discord_mentions(wish_text)
-    deco = custom_emoji or random.choice(fallback_unicode_emojis(time_of_day))
-    header = f"{deco} **Good {time_of_day}!** {deco}"
-    footer = f"{deco} {deco} {deco}"
+
+    base_pool = fallback_unicode_emojis(time_of_day)
+    pool: list[str] = []
+    if custom_emoji:
+        pool.append(custom_emoji)
+    pool.extend(e for e in base_pool if e not in pool)
+
+    # Pick distinct emojis for decoration (avoid repeating the same emoji)
+    picks = pool[:]
+    random.shuffle(picks)
+
+    # Ensure at least 3 distinct emojis; fall back gracefully if pool is small.
+    e1 = picks[0] if len(picks) >= 1 else "✨"
+    e2 = picks[1] if len(picks) >= 2 else ("🌸" if e1 != "🌸" else "💫")
+    e3 = picks[2] if len(picks) >= 3 else ("💫" if e1 != "💫" and e2 != "💫" else "🍀")
+
+    header = f"{e1} **Good {time_of_day}!** {e2}"
+    footer = f"{e3} {e2} {e1}"
     return f"{header}\n{wish_text}\n{footer}".strip()
 
 @client.event
