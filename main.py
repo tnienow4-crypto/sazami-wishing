@@ -1,11 +1,11 @@
 import discord
-import requests
 import json
 from discord.ext import commands
 from dotenv import load_dotenv
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from ollama import Client
 
 # Firestore (Firebase Admin) is optional – bot runs even if not configured
 try:
@@ -156,38 +156,38 @@ def save_user_memory(user_id: str, memory: Dict[str, Any]):
         print(f"Error saving memory for user {user_id}: {e}")
 
 
-# ------------------------------ Gemini helpers ------------------------------
+# ------------------------------ Ollama helpers ------------------------------
+
+# Initialize Ollama client
+ollama_client = Client(
+    host="https://ollama.com",
+    headers={'Authorization': 'Bearer ' + (GEMINI_API_KEY or '')}
+)
 
 def query_gemini_raw(user_input: str) -> str:
     # Intentionally avoid printing user inputs to terminal
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
-    headers = {
-        "Content-Type": "application/json",
-        "X-goog-api-key": GEMINI_API_KEY,
-    }
-    data = {
-        "contents": [
+    try:
+        messages = [
             {
-                "role": "user",
-                "parts": [
-                    {"text": f"{SYSTEM_PROMPT}\n\nUser: {user_input}"}
-                ],
+                'role': 'system',
+                'content': SYSTEM_PROMPT
+            },
+            {
+                'role': 'user',
+                'content': user_input
             }
         ]
-    }
-    response = requests.post(url, headers=headers, data=json.dumps(data))
-    # Avoid logging response details in terminal; only minimal codes if needed
-    # print("Gemini API response code:", response.status_code)
-    if response.status_code == 200:
-        try:
-            reply = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-            return reply
-        except Exception as e:
-            print("Gemini parsing error:", e)
-            return f"Gemini error: {e}"
-    else:
-        print(f"Gemini API Error: {response.status_code}")
-        return f"Gemini API Error: {response.status_code}"
+        
+        response = ollama_client.chat(
+            model='gemini-3-flash-preview:cloud',
+            messages=messages
+        )
+        
+        reply = response['message']['content'].strip()
+        return reply
+    except Exception as e:
+        print(f"Ollama API Error: {e}")
+        return f"Ollama API Error: {e}"
 
 
 def query_gemini(user_input: str) -> str:
