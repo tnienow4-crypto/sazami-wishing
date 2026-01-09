@@ -101,65 +101,61 @@ async def pick_decorations_with_ai(*, guild: discord.Guild, time_of_day: str, wi
     emoji_names = [e.name for e in emojis[:25] if getattr(e, "name", None)]
     sticker_names = [s.name for s in stickers[:10] if getattr(s, "name", None)]
 
-    # If nothing is available, we can still decorate with unicode.
+    # If nothing is available, we can't decorate with server assets.
     if not emoji_names and not sticker_names:
         return None, None
 
     prompt = (
-        "Pick ONE custom emoji name and optionally ONE sticker name to match a daily server wish. "
-        "You must choose only from the provided lists. If none fit, return null for that field. "
+        "Pick up to THREE distinct custom emoji names and optionally ONE sticker name to match a daily server wish. "
+        "You must choose only from the provided lists. If none fit, return an empty list for emojis and null for sticker. "
         "Never output @everyone, @here, or any mentions.\n\n"
         f"Time of day: {time_of_day}\n"
         f"Wish text: {wish_text}\n\n"
         f"Available custom emoji names: {emoji_names}\n"
         f"Available sticker names: {sticker_names}\n\n"
-        "Return STRICT JSON ONLY in this shape: {\"emoji\": string|null, \"sticker\": string|null}"
+        "Return STRICT JSON ONLY in this shape: {\"emojis\": [string, ...], \"sticker\": string|null}"
     )
 
     raw = await asyncio.to_thread(query_gemini_raw, prompt)
     raw = strip_discord_mentions(raw)
     data = _extract_first_json_object(raw)
 
-    emoji_pick = data.get("emoji") if isinstance(data, dict) else None
+    emoji_picks = data.get("emojis") if isinstance(data, dict) else None
     sticker_pick = data.get("sticker") if isinstance(data, dict) else None
 
-    emoji_obj = next((e for e in emojis if getattr(e, "name", None) == emoji_pick), None) if emoji_pick else None
+    emoji_objs: list[Any] = []
+    if isinstance(emoji_picks, list):
+        for name in emoji_picks:
+            if not isinstance(name, str):
+                continue
+            obj = next((e for e in emojis if getattr(e, "name", None) == name), None)
+            if obj is not None and obj not in emoji_objs:
+                emoji_objs.append(obj)
+            if len(emoji_objs) >= 3:
+                break
+
     sticker_obj = next((s for s in stickers if getattr(s, "name", None) == sticker_pick), None) if sticker_pick else None
-    return emoji_obj, sticker_obj
+    return emoji_objs, sticker_obj
 
 
-def fallback_unicode_emojis(time_of_day: str) -> list[str]:
-    t = time_of_day.lower()
-    if "morning" in t:
-        return ["☀️", "🌸", "✨", "🍵", "🐾"]
-    if "noon" in t or "afternoon" in t:
-        return ["🌤️", "💛", "✨", "🍀", "🎐"]
-    if "evening" in t:
-        return ["🌙", "🌆", "✨", "🍵", "💫"]
-    return ["🌙", "⭐", "✨", "🌌", "💤"]
-
-
-def format_decorated_wish(*, time_of_day: str, wish_text: str, custom_emoji: str | None):
+def format_decorated_wish(*, time_of_day: str, wish_text: str, custom_emojis: list[str]):
     wish_text = strip_discord_mentions(wish_text)
 
-    base_pool = fallback_unicode_emojis(time_of_day)
-    pool: list[str] = []
-    if custom_emoji:
-        pool.append(custom_emoji)
-    pool.extend(e for e in base_pool if e not in pool)
+    # Only decorate using server emojis.
+    unique = [e for e in (custom_emojis or []) if isinstance(e, str) and e.strip()]
+    unique = list(dict.fromkeys(unique))
 
-    # Pick distinct emojis for decoration (avoid repeating the same emoji)
-    picks = pool[:]
-    random.shuffle(picks)
+    if len(unique) >= 2:
+        header = f"{unique[0]} **Good {time_of_day}!** {unique[1]}"
+    elif len(unique) == 1:
+        header = f"{unique[0]} **Good {time_of_day}!**"
+    else:
+        header = f"**Good {time_of_day}!**"
 
-    # Ensure at least 3 distinct emojis; fall back gracefully if pool is small.
-    e1 = picks[0] if len(picks) >= 1 else "✨"
-    e2 = picks[1] if len(picks) >= 2 else ("🌸" if e1 != "🌸" else "💫")
-    e3 = picks[2] if len(picks) >= 3 else ("💫" if e1 != "💫" and e2 != "💫" else "🍀")
-
-    header = f"{e1} **Good {time_of_day}!** {e2}"
-    footer = f"{e3} {e2} {e1}"
-    return f"{header}\n{wish_text}\n{footer}".strip()
+    footer = " ".join(unique[:3]).strip()
+    if footer:
+        return f"{header}\n{wish_text}\n{footer}".strip()
+    return f"{header}\n{wish_text}".strip()
 
 @client.event
 async def on_ready():
@@ -214,7 +210,7 @@ async def on_ready():
 
         # 3. Fetch decorations (custom emojis/stickers) and let AI pick
         emojis, stickers = await fetch_guild_emojis_and_stickers(guild)
-        emoji_obj, sticker_obj = await pick_decorations_with_ai(
+        emoji_objs, sticker_obj = await pick_decorations_with_ai(
             guild=guild,
             time_of_day=TIME_OF_DAY,
             wish_text=base_wish,
@@ -224,7 +220,7 @@ async def on_ready():
         decorated = format_decorated_wish(
             time_of_day=TIME_OF_DAY,
             wish_text=base_wish,
-            custom_emoji=str(emoji_obj) if emoji_obj else None,
+            custom_emojis=[str(e) for e in (emoji_objs or [])],
         )
 
         # 4. Send server wish (no DMs, no mentions, try to suppress notifications)
