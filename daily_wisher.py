@@ -3,6 +3,10 @@ import os
 import argparse
 import asyncio
 import datetime
+import inspect
+import json
+import random
+import re
 import pytz
 from main import query_gemini_raw, GUILD_ID, CHANNEL_ID
 from dotenv import load_dotenv
@@ -14,7 +18,6 @@ load_dotenv()
 parser = argparse.ArgumentParser(description='Daily Wish Bot')
 parser.add_argument('--time', type=str, help='Time of day string (e.g. Morning, Evening). If not provided, auto-detected.')
 parser.add_argument('--test', action='store_true', help='Run in test mode (prints to console, does not DM users)')
-parser.add_argument('--target-id', type=str, help='Target specific User ID for testing (sends real DM only to this user)')
 args = parser.parse_args()
 
 # Constants
@@ -43,11 +46,7 @@ def get_time_of_day():
 TIME_OF_DAY = get_time_of_day().strip('"').strip("'")
 IS_TEST = args.test
 
-if args.target_id:
-    # Sanitize target_id (remove quotes if passed by shell)
-    args.target_id = args.target_id.strip('"').strip("'")
-
-print(f"Starting Daily Wisher. Time: {TIME_OF_DAY}, Test Mode: {IS_TEST}, Target: {args.target_id}")
+print(f"Starting Daily Wisher. Time: {TIME_OF_DAY}, Test Mode: {IS_TEST}")
 
 # Setup Discord
 intents = discord.Intents.default()
@@ -56,29 +55,96 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 
 
-def chunk_mentions(members, *, prefix: str = "", suffix: str = "", max_len: int = 1900):
-    """Yield strings of user mentions that fit within Discord's message limit.
+_MENTION_RE = re.compile(r"<@&?\d+>|<@!?\d+>")
 
-    max_len is conservative to leave room for extra text.
-    """
-    chunk = []
-    cur_len = len(prefix) + len(suffix)
 
-    for m in members:
-        mention = m.mention
-        add_len = len(mention) + (1 if chunk else 0)
-        if chunk and cur_len + add_len > max_len:
-            yield (prefix + " ".join(chunk) + suffix)
-            chunk = [mention]
-            cur_len = len(prefix) + len(suffix) + len(mention)
-        else:
-            if chunk:
-                cur_len += 1
-            chunk.append(mention)
-            cur_len += len(mention)
+def strip_discord_mentions(text: str) -> str:
+    if not text:
+        return ""
+    text = text.replace("@everyone", "everyone").replace("@here", "here")
+    text = _MENTION_RE.sub("", text)
+    # Avoid accidental pings from role/user-like strings
+    text = text.replace("@", "")
+    return text.strip()
 
-    if chunk:
-        yield (prefix + " ".join(chunk) + suffix)
+
+async def fetch_guild_emojis_and_stickers(guild: discord.Guild):
+    try:
+        emojis = await guild.fetch_emojis()
+    except Exception:
+        emojis = list(getattr(guild, "emojis", []))
+
+    try:
+        stickers = await guild.fetch_stickers()
+    except Exception:
+        stickers = list(getattr(guild, "stickers", []))
+
+    return emojis, stickers
+
+
+def _extract_first_json_object(text: str) -> dict:
+    if not text:
+        return {}
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return {}
+    candidate = text[start : end + 1]
+    try:
+        return json.loads(candidate)
+    except Exception:
+        return {}
+
+
+async def pick_decorations_with_ai(*, guild: discord.Guild, time_of_day: str, wish_text: str, emojis, stickers):
+    # Keep lists small to avoid prompt bloat
+    emoji_names = [e.name for e in emojis[:25] if getattr(e, "name", None)]
+    sticker_names = [s.name for s in stickers[:10] if getattr(s, "name", None)]
+
+    # If nothing is available, we can still decorate with unicode.
+    if not emoji_names and not sticker_names:
+        return None, None
+
+    prompt = (
+        "Pick ONE custom emoji name and optionally ONE sticker name to match a daily server wish. "
+        "You must choose only from the provided lists. If none fit, return null for that field. "
+        "Never output @everyone, @here, or any mentions.\n\n"
+        f"Time of day: {time_of_day}\n"
+        f"Wish text: {wish_text}\n\n"
+        f"Available custom emoji names: {emoji_names}\n"
+        f"Available sticker names: {sticker_names}\n\n"
+        "Return STRICT JSON ONLY in this shape: {\"emoji\": string|null, \"sticker\": string|null}"
+    )
+
+    raw = await asyncio.to_thread(query_gemini_raw, prompt)
+    raw = strip_discord_mentions(raw)
+    data = _extract_first_json_object(raw)
+
+    emoji_pick = data.get("emoji") if isinstance(data, dict) else None
+    sticker_pick = data.get("sticker") if isinstance(data, dict) else None
+
+    emoji_obj = next((e for e in emojis if getattr(e, "name", None) == emoji_pick), None) if emoji_pick else None
+    sticker_obj = next((s for s in stickers if getattr(s, "name", None) == sticker_pick), None) if sticker_pick else None
+    return emoji_obj, sticker_obj
+
+
+def fallback_unicode_emojis(time_of_day: str) -> list[str]:
+    t = time_of_day.lower()
+    if "morning" in t:
+        return ["☀️", "🌸", "✨", "🍵", "🐾"]
+    if "noon" in t or "afternoon" in t:
+        return ["🌤️", "💛", "✨", "🍀", "🎐"]
+    if "evening" in t:
+        return ["🌙", "🌆", "✨", "🍵", "💫"]
+    return ["🌙", "⭐", "✨", "🌌", "💤"]
+
+
+def format_decorated_wish(*, time_of_day: str, wish_text: str, custom_emoji: str | None):
+    wish_text = strip_discord_mentions(wish_text)
+    deco = custom_emoji or random.choice(fallback_unicode_emojis(time_of_day))
+    header = f"{deco} **Good {time_of_day}!** {deco}"
+    footer = f"{deco} {deco} {deco}"
+    return f"{header}\n{wish_text}\n{footer}".strip()
 
 @client.event
 async def on_ready():
@@ -106,22 +172,20 @@ async def on_ready():
                 await asyncio.sleep(5)
             return fallback
 
-        # 1. Generate Wish Messages (ONCE for everyone)
-        print("Generating daily wishes...")
-        
-        # Channel Wish
-        channel_wish = await generate_with_retry(
-            f"Write a cheerful {TIME_OF_DAY} wish for everyone in the server '{guild.name}'. Keep it in character (Sazami, anime girl). Use emojis.",
-            f"Good {TIME_OF_DAY} everyone! Hope you have a great time! 💖"
-        )
-        
-        # DM Wish (Generic but warm)
-        dm_wish = await generate_with_retry(
-            f"Write a warm, cute {TIME_OF_DAY} wish to send to a friend via DM. Keep it in character (Sazami). Do not mention specific names. Use emojis.",
-            f"Hey! Just wanted to wish you a wonderful {TIME_OF_DAY}! Stay happy! ✨"
-        )
+        # 1. Generate Wish Message (server-only)
+        print("Generating daily server wish...")
 
-        print(f"Generated DM Wish: {dm_wish[:50]}...")
+        base_wish = await generate_with_retry(
+            (
+                f"Write a cheerful {TIME_OF_DAY} wish for a Discord server. "
+                "Keep it friendly, short (1-2 paragraphs max), and decorative with emojis. "
+                "Do NOT mention or tag any users or roles. "
+                "Do NOT use @everyone or @here. "
+                "Do NOT include any user names."
+            ),
+            f"Wishing you a lovely {TIME_OF_DAY}! Stay safe, stay strong, and have a beautiful day ahead! ✨"
+        )
+        base_wish = strip_discord_mentions(base_wish)
 
         # 2. Prepare Image
         image_filename = f"good-{TIME_OF_DAY.lower()}.png"
@@ -133,69 +197,58 @@ async def on_ready():
         else:
             print(f"WARNING: Image not found at {image_path}. Sending text only.")
 
-        # 3. Send Channel Wish
+        # 3. Fetch decorations (custom emojis/stickers) and let AI pick
+        emojis, stickers = await fetch_guild_emojis_and_stickers(guild)
+        emoji_obj, sticker_obj = await pick_decorations_with_ai(
+            guild=guild,
+            time_of_day=TIME_OF_DAY,
+            wish_text=base_wish,
+            emojis=emojis,
+            stickers=stickers,
+        )
+        decorated = format_decorated_wish(
+            time_of_day=TIME_OF_DAY,
+            wish_text=base_wish,
+            custom_emoji=str(emoji_obj) if emoji_obj else None,
+        )
+
+        # 4. Send server wish (no DMs, no mentions, try to suppress notifications)
         if channel:
             if IS_TEST:
-                print(f"[TEST] Channel Message to #{channel.name}: {channel_wish} [Image: {image_filename if has_image else 'None'}]")
+                print(
+                    f"[TEST] Channel Message to #{channel.name}: {decorated} "
+                    f"[Sticker: {getattr(sticker_obj, 'name', None)}] "
+                    f"[Image: {image_filename if has_image else 'None'}]"
+                )
             else:
                 try:
-                    # Create fresh file object for channel
-                    file_to_send = discord.File(image_path) if has_image else None
-                    await channel.send(channel_wish, file=file_to_send)
-                    print(f"Sent channel wish to #{channel.name}")
+                    send_kwargs = {
+                        "content": decorated,
+                        "allowed_mentions": discord.AllowedMentions.none(),
+                    }
+
+                    # Try to suppress notifications if the installed discord.py supports it.
+                    try:
+                        if "silent" in inspect.signature(channel.send).parameters:
+                            send_kwargs["silent"] = True
+                    except Exception:
+                        pass
+
+                    if has_image:
+                        send_kwargs["file"] = discord.File(image_path)
+
+                    # Stickers are optional and API/signature dependent.
+                    if sticker_obj is not None:
+                        try:
+                            if "stickers" in inspect.signature(channel.send).parameters:
+                                send_kwargs["stickers"] = [sticker_obj]
+                        except Exception:
+                            pass
+
+                    await channel.send(**send_kwargs)
+                    print(f"Sent server wish to #{channel.name}")
                 except Exception as e:
-                    print(f"Error sending channel wish: {e}")
-
-        # 4. Broadcast DM Wish
-        print(f"Fetching members...")
-        if not guild.chunked:
-            await guild.chunk()
-
-        dm_failed_members = []
-            
-        for member in guild.members:
-            if member.bot:
-                continue
-
-            # Target User Filter
-            if args.target_id and str(member.id) != args.target_id:
-                continue
-
-            print(f"Processing {member.name} ({member.id})...")
-            
-            if IS_TEST:
-                print(f"[TEST] DM to {member.name}: {dm_wish} [Image: {image_filename if has_image else 'None'}]")
-            else:
-                try:
-                    # Create FRESH file object for each DM (stream is consumed)
-                    file_to_send = discord.File(image_path) if has_image else None
-                    await member.send(dm_wish, file=file_to_send)
-                    print(f"Sent DM to {member.name}")
-                except discord.Forbidden:
-                    print(f"DM disabled for {member.name}. Will mention in summary message.")
-                    dm_failed_members.append(member)
-                except Exception as e:
-                    print(f"Error sending to {member.name}: {e}")
-
-            # Sleep briefly to avoid Discord rate limits (not Gemini anymore)
-            await asyncio.sleep(1.5)
-
-        # 5. Single summary message for members with DMs disabled
-        if not IS_TEST and channel and dm_failed_members:
-            allowed = discord.AllowedMentions(users=True, roles=False, everyone=False, replied_user=False)
-
-            mentions_text = " ".join(m.mention for m in dm_failed_members)
-            combined = f"{mentions_text}\n\n{dm_wish}".strip()
-
-            # Prefer ONE message. If too long (large server), fall back to chunking mentions,
-            # attaching the wish only to the final chunk.
-            if len(combined) <= 2000:
-                await channel.send(combined, allowed_mentions=allowed)
-            else:
-                mention_chunks = list(chunk_mentions(dm_failed_members, max_len=1900))
-                for chunk_text in mention_chunks[:-1]:
-                    await channel.send(chunk_text, allowed_mentions=allowed)
-                await channel.send(f"{mention_chunks[-1]}\n\n{dm_wish}".strip(), allowed_mentions=allowed)
+                    print(f"Error sending server wish: {e}")
 
     except Exception as e:
         print(f"An error occurred during execution: {e}")
